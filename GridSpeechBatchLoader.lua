@@ -43,6 +43,8 @@ function GridSpeechBatchLoader:next_class_batch()
     spk_labels  = torch.zeros(self.batch_size)
     word_labels = torch.zeros(self.batch_size)
 
+    scale = 1
+
     for i=1, self.batch_size do
         spk = torch.random(1, self.nspeakers)
         word_idx = torch.random(1, #self.words)
@@ -50,7 +52,7 @@ function GridSpeechBatchLoader:next_class_batch()
 
         word_examples = self.trainset[spk][word]
 
-        x[{i,1,{},{}}] = word_examples[torch.random(1, word_examples:size()[1])]
+        x[{i,1,{},{}}] = word_examples[torch.random(1, word_examples:size()[1])]:mul(scale)
         spk_labels[i] = spk
         word_labels[i] = word_idx
     end

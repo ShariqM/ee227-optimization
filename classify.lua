@@ -25,7 +25,7 @@ cmd:option('-dropout',0,'dropout for regularization, used after each CNN hidden 
 cmd:option('-log',false,'Log probabilites')
 cmd:option('-save_pred',false,'Save prediction')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
-cmd:option('-learning_rate',1e-2,'learning rate')
+cmd:option('-learning_rate', 1e-2,'learning rate')
 cmd:option('-learning_rate_decay',0.98,'learning rate decay')
 cmd:option('-learning_rate_decay_after',20,'in number of epochs, when to start decaying the learning rate')
 
@@ -49,10 +49,6 @@ elseif opt.type == 'cuda' then
     torch.setdefaulttensortype('torch.FloatTensor') -- Not sure why I do this
 end
 
--- cqt_features = 175
--- timepoints = 135
--- cqt_features = 176
--- timepoints = 83
 cqt_features = 175
 timepoints = 140
 local loader = GridSpeechBatchLoader.create(cqt_features, timepoints, opt.batch_size, false)
@@ -90,6 +86,9 @@ end
 first = true
 last_grad_params = params:clone() -- Dummy
 last_params = params:clone() -- Dummy
+L = -1.0
+m = -1.0
+grad_pos_norm = -1.0
 
 function feval(p)
     if p ~= params then
@@ -105,7 +104,7 @@ function feval(p)
 
     if opt.type == 'cuda' then
         x = x:float():cuda()
-        spk_labels  =  spk_labels:float():cuda()
+        spk_labels  = spk_labels:float():cuda()
         word_labels = word_labels:float():cuda()
     end
 
@@ -137,9 +136,15 @@ function feval(p)
         grad_diff = grad_params - last_grad_params
         param_diff = params - last_params
         L = torch.norm(grad_diff) / torch.norm(param_diff)
-        m = grad_diff:dot(param_diff) / torch.norm(param_diff) ^ 2
-        print (string.format("1/L:%.5f || 2/(L+m):%.5f || m:%.3f", 1/L, 2/(L+m), m))
+        m = grad_diff:dot(param_diff) / (torch.norm(param_diff) ^ 2)
+        if m < 0 then
+            m = L
+        end
+        -- grad_pos_norm = torch.norm((grad_params + torch.abs(grad_params)) / 2) / torch.norm(params)
+        -- print (string.format("1/L:%.5f || 2/(L+m):%.5f || m:%.3f", 1/L, 2/(L+m), m))
     end
+    grad_norm = torch.norm(grad_params) ^ 2
+    -- print (grad_norm, type(grad_norm))
     first = false
     last_params:copy(params)
     last_grad_params:copy(grad_params)
@@ -151,29 +156,66 @@ end
 local iterations = opt.max_epochs * opt.iters
 local iterations_per_epoch = opt.iters
 local loss0 = nil
+-- local optim_state = {learningRate = opt.learning_rate, momentum = 0.5, dampening = 0}
 local optim_state = {learningRate = opt.learning_rate}
 T = 100
 decay_time = T
+Ls = {}
+ms = {}
+losses = {}
+gns = {}
+gamma = 0.1
+beta = 0.5
 
 for i = 1, iterations do
     local epoch = i / iterations_per_epoch
 
     local timer = torch.Timer()
-    local _, loss = optim.sgd(feval, params, optim_state)
+    -- local _, loss = optim.sgd(feval, params, optim_state)
+    -- local _, loss = optim.rmsprop(feval, params, optim_state)
+    local _, loss = optim.adam(feval, params, optim_state)
     local time = timer:time().real
 
     loss = loss[1]
+    Ls[i] = L
+    ms[i] = m
+    losses[i] = loss
+    gns[i] = grad_norm
 
-    if i >= decay_time then
-        optim_state.learningRate = optim_state.learningRate * 1./2
-        print(string.format("Decayed learning rate to %.5f", optim_state.learningRate))
-        T = 2*T
-        decay_time = i + T
+    lipschitz = false
+    back_track = false
+    if lipschitz then
+        k = L/m
+        optim_state.learningRate = 1/L
+        optim_state.momentum = 1 - (math.sqrt(k) - 1) / (math.sqrt(k) + 1)
+        -- optim_state.learningRate = 2/(L+m)
+    elseif back_track then
+        if i > 10 and i % 10 == 0 then
+            l = torch.Tensor(losses)
+            gnst = torch.Tensor(gns)
+            factor = gamma * optim_state.learningRate * torch.mean(gnst[{{i-9,i}}])
+            if torch.mean(l[{{i-9,i}}]) > torch.mean(l[{{i-19,i-10}}]) - factor then
+                optim_state.learningRate = optim_state.learningRate * beta
+                print(string.format("Decayed learning rate to %.5f", optim_state.learningRate))
+            end
+        end
+    else
+        if i >= decay_time then
+            optim_state.learningRate = optim_state.learningRate * 1./2
+            print(string.format("Decayed learning rate to %.5f", optim_state.learningRate))
+            T = 2*T
+            decay_time = i + T
+        end
     end
 
     if i == 1 or i % opt.print_every == 0 then
         print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, iterations, epoch, loss, grad_params:norm() / params:norm(), time))
     end
+    -- print (string.format("1/L:%.5f || 2/(L+m):%.5f || L:%.3f || m:%.3f", 1/L, 2/(L+m), L, m))
+    -- matio.save('Ls.mat', torch.Tensor(Ls))
+    -- matio.save('ms.mat', torch.Tensor(ms))
+    -- matio.save('gpns.mat', torch.Tensor(gpns))
+    matio.save('adam_2.mat', torch.Tensor(losses))
 
     if (i % opt.save_every == 0 or i == iterations) then
         local savefile = string.format('%s/net_classify_%.2f.t7', opt.checkpoint_dir, epoch)
