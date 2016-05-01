@@ -158,7 +158,7 @@ local iterations_per_epoch = opt.iters
 local loss0 = nil
 -- local optim_state = {learningRate = opt.learning_rate, momentum = 0.5, dampening = 0}
 local optim_state = {learningRate = opt.learning_rate}
-T = 100
+T = 20
 decay_time = T
 Ls = {}
 ms = {}
@@ -171,12 +171,13 @@ for i = 1, iterations do
     local epoch = i / iterations_per_epoch
 
     local timer = torch.Timer()
-    -- local _, loss = optim.sgd(feval, params, optim_state)
+    local _, loss = optim.sgd(feval, params, optim_state)
     -- local _, loss = optim.rmsprop(feval, params, optim_state)
-    local _, loss = optim.adam(feval, params, optim_state)
+    -- local _, loss = optim.adam(feval, params, optim_state)
     local time = timer:time().real
 
     loss = loss[1]
+    print (L)
     Ls[i] = L
     ms[i] = m
     losses[i] = loss
@@ -212,10 +213,10 @@ for i = 1, iterations do
         print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, iterations, epoch, loss, grad_params:norm() / params:norm(), time))
     end
     -- print (string.format("1/L:%.5f || 2/(L+m):%.5f || L:%.3f || m:%.3f", 1/L, 2/(L+m), L, m))
-    -- matio.save('Ls.mat', torch.Tensor(Ls))
-    -- matio.save('ms.mat', torch.Tensor(ms))
-    -- matio.save('gpns.mat', torch.Tensor(gpns))
-    matio.save('adam_2.mat', torch.Tensor(losses))
+    matio.save('mats/Ls.mat', torch.Tensor(Ls))
+    -- matio.save('mats/ms.mat', torch.Tensor(ms))
+    -- matio.save('mats/gpns.mat', torch.Tensor(gpns))
+    -- matio.save('mats/adam_2.mat', torch.Tensor(losses))
 
     if (i % opt.save_every == 0 or i == iterations) then
         local savefile = string.format('%s/net_classify_%.2f.t7', opt.checkpoint_dir, epoch)
